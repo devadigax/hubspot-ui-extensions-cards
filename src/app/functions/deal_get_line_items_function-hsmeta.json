@@ -1,0 +1,8 @@
+{
+    "uid": "get_line_items_function",
+    "type": "app-function",
+    "config": {
+      "entrypoint": "/app/functions/deal_get_line_items_function.js",
+      "secretKeys": []
+    }
+  }

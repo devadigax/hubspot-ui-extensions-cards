@@ -1,0 +1,11 @@
+{
+  "uid": "contact_manager",
+  "type": "card",
+  "config": {
+    "name": "Contact Manager",
+    "description": "Allows you to manage contact information",
+    "entrypoint": "/app/cards/contact_manager.tsx",
+    "location": "crm.record.tab",
+    "objectTypes": [ "CONTACT" ]
+  }
+}

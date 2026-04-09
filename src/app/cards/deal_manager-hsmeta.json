@@ -1,0 +1,11 @@
+{
+  "uid": "deal_manager",
+  "type": "card",
+  "config": {
+    "name": "Deal Manager",
+    "description": "Allows you to manage deal information",
+    "entrypoint": "/app/cards/deal_manager.tsx",
+    "location": "crm.record.tab",
+    "objectTypes": [ "DEAL" ]
+  }
+}

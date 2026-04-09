@@ -1,0 +1,11 @@
+{
+  "uid": "deal_lineitems",
+  "type": "card",
+  "config": {
+    "name": "Deal Line Items",
+    "description": "Allows you to manage deal line items",
+    "entrypoint": "/app/cards/deal_lineitems.tsx",
+    "location": "crm.record.tab",
+    "objectTypes": [ "DEAL" ]
+  }
+}
