@@ -1,0 +1,8 @@
+{
+    "uid": "search_products_function",
+    "type": "app-function",
+    "config": {
+      "entrypoint": "/app/functions/deal_search_products_function.js",
+      "secretKeys": []
+    }
+  }
