@@ -14,12 +14,9 @@ import {
   TableCell,
   Button,
   Input,
-  Flex,
-  Box,
-  Divider
+  Flex
 } from '@hubspot/ui-extensions';
 
-// Define the extension and pass actions so we can trigger alerts
 hubspot.extend(({ context, actions }) => (
   <LineItemList context={context} addAlert={actions.addAlert} />
 ));
@@ -29,12 +26,11 @@ const LineItemList = ({ context, addAlert }) => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   
-  // State for the Create/Edit Form
-  const [showForm, setShowForm] = useState(false);
+  // State for Inline Editing
+  const [editingId, setEditingId] = useState(null); // Tracks which row is in edit mode
   const [saving, setSaving] = useState(false);
-  const [formData, setFormData] = useState({ id: null, name: '', price: '', quantity: '1' });
+  const [editFormData, setEditFormData] = useState({ id: null, name: '', price: '', quantity: '1' });
 
-  // Extracted fetch function so we can call it after saving
   const fetchLineItems = async () => {
     setLoading(true);
     try {
@@ -58,25 +54,37 @@ const LineItemList = ({ context, addAlert }) => {
     fetchLineItems();
   }, [context.crm.objectId]);
 
-  // Form Handlers
+  // --- INLINE EDIT HANDLERS ---
+
   const handleEditClick = (item) => {
-    setFormData({ id: item.id, name: item.name, price: item.price, quantity: item.quantity });
-    setShowForm(true);
+    setEditingId(item.id);
+    setEditFormData({ id: item.id, name: item.name, price: item.price, quantity: item.quantity });
   };
 
   const handleCreateNewClick = () => {
-    setFormData({ id: null, name: '', price: '', quantity: '1' });
-    setShowForm(true);
+    // Prevent opening multiple new rows at once
+    if (editingId === 'NEW_TEMP_ITEM') return; 
+
+    // Append a temporary blank item to the UI list
+    const tempItem = { id: 'NEW_TEMP_ITEM', name: '', price: '', quantity: '1', amount: '0' };
+    setLineItems([...lineItems, tempItem]);
+    
+    // Set it into edit mode
+    setEditingId('NEW_TEMP_ITEM');
+    setEditFormData({ id: null, name: '', price: '', quantity: '1' });
   };
 
-  const handleCancelForm = () => {
-    setShowForm(false);
-    setFormData({ id: null, name: '', price: '', quantity: '1' });
+  const handleCancelEdit = () => {
+    // If we were creating a new item, remove the temporary row from the list
+    if (editingId === 'NEW_TEMP_ITEM') {
+      setLineItems(lineItems.filter(item => item.id !== 'NEW_TEMP_ITEM'));
+    }
+    setEditingId(null);
   };
 
   const handleSave = async () => {
-    if (!formData.name || !formData.price || !formData.quantity) {
-      addAlert({ title: "Validation Error", message: "All fields are required.", type: "danger" });
+    if (!editFormData.name || !editFormData.price || !editFormData.quantity) {
+      addAlert({ title: "Validation Error", message: "Name, Price, and Qty are required.", type: "danger" });
       return;
     }
 
@@ -85,17 +93,17 @@ const LineItemList = ({ context, addAlert }) => {
       const result = await hubspot.serverless('save_line_item_function', {
         parameters: { 
           dealId: context.crm.objectId,
-          id: formData.id, // Will be null for new creations
-          name: formData.name,
-          price: formData.price,
-          quantity: formData.quantity
+          id: editFormData.id, 
+          name: editFormData.name,
+          price: editFormData.price,
+          quantity: editFormData.quantity
         }
       });
 
       if (result.body.success) {
         addAlert({ title: "Success", message: result.body.message, type: "success" });
-        setShowForm(false);
-        fetchLineItems(); // Refresh the table
+        setEditingId(null);
+        fetchLineItems(); // Refresh data to get real HubSpot IDs and calculated amounts
       } else {
         addAlert({ title: "Error saving item", message: result.body.error, type: "danger" });
       }
@@ -105,6 +113,8 @@ const LineItemList = ({ context, addAlert }) => {
       setSaving(false);
     }
   };
+
+  // --- RENDERERS ---
 
   if (loading && lineItems.length === 0) {
     return <LoadingSpinner label="Loading line items..." />;
@@ -117,59 +127,8 @@ const LineItemList = ({ context, addAlert }) => {
   return (
     <Flex direction="column" gap="medium">
       
-      {/* HEADER WITH CREATE BUTTON */}
-      <Flex direction="row" justify="between" align="center">
-        <Text format={{ fontWeight: 'bold' }}>Deal Line Items</Text>
-        {!showForm && (
-          <Button size="sm" variant="primary" onClick={handleCreateNewClick}>
-            + Add Line Item
-          </Button>
-        )}
-      </Flex>
-
-      <Divider />
-
-      {/* CREATE / EDIT FORM */}
-      {showForm && (
-        <Box>
-          <Text format={{ fontWeight: 'bold' }} variant="microcopy">
-            {formData.id ? 'Edit Line Item' : 'New Line Item'}
-          </Text>
-          <Flex direction="column" gap="small">
-            <Input 
-              value={formData.name} 
-              onChange={(val) => setFormData({ ...formData, name: val })} 
-              placeholder="Item Name" 
-            />
-            <Flex direction="row" gap="small">
-              <Input 
-                type="number" 
-                value={formData.price} 
-                onChange={(val) => setFormData({ ...formData, price: val })} 
-                placeholder="Price ($)" 
-              />
-              <Input 
-                type="number" 
-                value={formData.quantity} 
-                onChange={(val) => setFormData({ ...formData, quantity: val })} 
-                placeholder="Qty" 
-              />
-            </Flex>
-            <Flex direction="row" gap="small">
-              <Button onClick={handleSave} variant="primary" disabled={saving}>
-                {saving ? 'Saving...' : 'Save Item'}
-              </Button>
-              <Button onClick={handleCancelForm} variant="secondary" disabled={saving}>
-                Cancel
-              </Button>
-            </Flex>
-          </Flex>
-          <Divider />
-        </Box>
-      )}
-
-      {/* TABLE */}
-      {lineItems.length === 0 && !showForm ? (
+      {/* INLINE TABLE */}
+      {lineItems.length === 0 && editingId === null ? (
         <Text>No line items found for this deal.</Text>
       ) : (
         <Table bordered={true}>
@@ -177,28 +136,105 @@ const LineItemList = ({ context, addAlert }) => {
             <TableRow>
               <TableHeader>Name</TableHeader>
               <TableHeader>Qty</TableHeader>
-              <TableHeader>Price</TableHeader>
-              <TableHeader>Amount</TableHeader>
+              <TableHeader>Price ($)</TableHeader>
+              <TableHeader>Amount ($)</TableHeader>
               <TableHeader>Actions</TableHeader>
             </TableRow>
           </TableHead>
           <TableBody>
-            {lineItems.map((item) => (
-              <TableRow key={item.id}>
-                <TableCell>{item.name}</TableCell>
-                <TableCell>{item.quantity}</TableCell>
-                <TableCell>${item.price}</TableCell>
-                <TableCell format={{ fontWeight: 'bold' }}>${item.amount}</TableCell>
-                <TableCell>
-                  <Button size="sm" variant="secondary" onClick={() => handleEditClick(item)} disabled={saving || showForm}>
-                    Edit
-                  </Button>
-                </TableCell>
-              </TableRow>
-            ))}
+            {lineItems.map((item) => {
+              const isEditing = editingId === item.id;
+
+              return (
+                <TableRow key={item.id}>
+                  {/* NAME COLUMN */}
+                  <TableCell>
+                    {isEditing ? (
+                      <Input 
+                        value={editFormData.name} 
+                        onChange={(val) => setEditFormData({ ...editFormData, name: val })} 
+                        placeholder="Name"
+                      />
+                    ) : (
+                      item.name
+                    )}
+                  </TableCell>
+
+                  {/* QUANTITY COLUMN */}
+                  <TableCell>
+                    {isEditing ? (
+                      <Input 
+                        type="number"
+                        value={editFormData.quantity} 
+                        onChange={(val) => setEditFormData({ ...editFormData, quantity: val })} 
+                      />
+                    ) : (
+                      item.quantity
+                    )}
+                  </TableCell>
+
+                  {/* PRICE COLUMN */}
+                  <TableCell>
+                    {isEditing ? (
+                      <Input 
+                        type="number"
+                        value={editFormData.price} 
+                        onChange={(val) => setEditFormData({ ...editFormData, price: val })} 
+                        placeholder="0.00"
+                      />
+                    ) : (
+                      item.price
+                    )}
+                  </TableCell>
+
+                  {/* AMOUNT COLUMN (Always read-only, calculated dynamically during edit) */}
+                  <TableCell format={{ fontWeight: 'bold' }}>
+                    {isEditing 
+                      ? (parseFloat(editFormData.price || 0) * parseFloat(editFormData.quantity || 0)).toFixed(2) 
+                      : item.amount}
+                  </TableCell>
+
+                  {/* ACTIONS COLUMN */}
+                  <TableCell>
+                    {isEditing ? (
+                      <Flex direction="row" gap="small">
+                        <Button size="sm" variant="primary" onClick={handleSave} disabled={saving}>
+                          {saving ? '...' : 'Save'}
+                        </Button>
+                        <Button size="sm" variant="secondary" onClick={handleCancelEdit} disabled={saving}>
+                          Cancel
+                        </Button>
+                      </Flex>
+                    ) : (
+                      <Button 
+                        size="sm" 
+                        variant="secondary" 
+                        onClick={() => handleEditClick(item)} 
+                        disabled={editingId !== null} // Disable edit on other rows if one is active
+                      >
+                        Edit
+                      </Button>
+                    )}
+                  </TableCell>
+                </TableRow>
+              );
+            })}
           </TableBody>
         </Table>
       )}
+
+      {/* FOOTER WITH CREATE BUTTON */}
+      <Flex direction="row" justify="between" align="center">
+        <Text format={{ fontWeight: 'bold' }}>Deal Line Items</Text>
+        <Button 
+          size="sm" 
+          variant="primary" 
+          onClick={handleCreateNewClick} 
+          disabled={editingId !== null} // Disable new button if currently editing
+        >
+          + Add Line Item
+        </Button>
+      </Flex>
     </Flex>
   );
 };
