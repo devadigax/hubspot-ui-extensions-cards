@@ -22,21 +22,30 @@ exports.main = async (context) => {
       'https://api.hubapi.com/crm/v3/objects/line_items/batch/read',
       {
         inputs: lineItemIds.map(id => ({ id: id.toString() })),
-        // Added hs_sku and hs_product_id to the read properties
-        properties: ['name', 'price', 'quantity', 'amount', 'hs_sku', 'hs_product_id'] 
+        properties: ['name', 'price', 'quantity', 'amount', 'hs_sku', 'hs_product_id', 'discount'] 
       },
       { headers }
     );
 
-    const formattedLineItems = batchResponse.data.results.map(item => ({
-      id: item.id,
-      productId: item.properties.hs_product_id || null, // Map this so editing works smoothly later
-      name: item.properties.name || 'Unnamed Line Item',
-      sku: item.properties.hs_sku || '', // Map the SKU
-      price: item.properties.price || '0.00',
-      quantity: item.properties.quantity || '0',
-      amount: item.properties.amount || '0.00'
-    }));
+    const formattedLineItems = batchResponse.data.results.map(item => {
+      const price = parseFloat(item.properties.price || '0');
+      const quantity = parseFloat(item.properties.quantity || '0');
+      const perUnitDiscount = parseFloat(item.properties.discount || '0');
+      
+      // Convert HubSpot's Per-Unit discount back to a Total Discount for the UI
+      const totalDiscount = (perUnitDiscount * quantity).toFixed(2);
+
+      return {
+        id: item.id,
+        productId: item.properties.hs_product_id || null,
+        name: item.properties.name || 'Unnamed Line Item',
+        sku: item.properties.hs_sku || '',
+        price: price.toString(),
+        quantity: quantity.toString(),
+        discount: totalDiscount, // Pass Total Discount to UI
+        amount: parseFloat(item.properties.amount || '0').toFixed(2)
+      };
+    });
 
     return { statusCode: 200, body: { success: true, lineItems: formattedLineItems } };
 

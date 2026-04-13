@@ -1,219 +1,347 @@
-// deal_lineitems.tsx
-
-import React, { useEffect, useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
-  hubspot, 
-  LoadingSpinner, 
-  Alert, 
-  Text,
-  Table, 
-  TableHead, 
-  TableRow, 
-  TableHeader, 
-  TableBody, 
-  TableCell,
-  Button,
-  Input,
-  Flex,
-  Select,
-  Box
+  Button, Input, Icon, Flex, Box, Select, Text, hubspot, 
+  Table, TableHead, TableRow, TableHeader, TableBody, TableCell, LoadingSpinner 
 } from '@hubspot/ui-extensions';
 
 hubspot.extend(({ context, actions }) => (
-  <LineItemList context={context} addAlert={actions.addAlert} />
+  <LineItemManager context={context} addAlert={actions.addAlert} />
 ));
 
-const LineItemList = ({ context, addAlert }) => {
+// --- MAIN COMPONENT: LIST & MANAGER ---
+const LineItemManager = ({ context, addAlert }) => {
   const [lineItems, setLineItems] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  
-  // Product Search State
-  const [productOptions, setProductOptions] = useState([]);
-  const [productLoading, setProductLoading] = useState(false);
-
-  // State for Inline Editing
-  const [editingId, setEditingId] = useState(null);
-  const [saving, setSaving] = useState(false);
-  const [editFormData, setEditFormData] = useState({ id: null, productId: null, name: '', sku: '', price: '', quantity: '1' });
+  const [products, setProducts] = useState([]);
+  const [loadingItems, setLoadingItems] = useState(true);
+  const [isAdding, setIsAdding] = useState(false);
+  const dealId = context.crm.objectId;
 
   const fetchLineItems = async () => {
-    setLoading(true);
+    setLoadingItems(true);
     try {
       const result = await hubspot.serverless('get_line_items_function', {
-        parameters: { dealId: context.crm.objectId }
+        parameters: { dealId }
       });
-      if (result.body.success) setLineItems(result.body.lineItems);
-    } catch (err) {
-      setError(err.message);
+      if (result.body.success) {
+        setLineItems(result.body.lineItems);
+      } else {
+        addAlert({ title: "Error", message: result.body.error, type: "danger" });
+      }
+    } catch (error) {
+      addAlert({ title: "Error", message: error.message, type: "danger" });
     } finally {
-      setLoading(false);
+      setLoadingItems(false);
+    }
+  };
+
+  const fetchProducts = async (searchQuery = '') => {
+    try {
+      const result = await hubspot.serverless('search_products_function', {
+        parameters: { query: searchQuery }
+      });
+      if (result.body.success) {
+        setProducts(result.body.options);
+      }
+    } catch (error) {
+      addAlert({ title: "Error", message: "Failed to load products", type: "danger" });
     }
   };
 
   useEffect(() => {
     fetchLineItems();
-  }, [context.crm.objectId]);
+    fetchProducts();
+  }, []);
 
-  // Search Product Library
-  const handleSearchProducts = async (query) => {
-    if (query.length < 2) return;
-    setProductLoading(true);
-    try {
-      const result = await hubspot.serverless('search_products_function', {
-        parameters: { query }
-      });
-      if (result.body.success) setProductOptions(result.body.options);
-    } finally {
-      setProductLoading(false);
+  if (loadingItems) return <LoadingSpinner label="Loading line items..." />;
+
+  return (
+    <Flex direction="column" gap="medium">
+      <Table>
+        <TableHead>
+          <TableRow>
+            <TableHeader>Product</TableHeader>
+            <TableHeader>Price ($)</TableHeader>
+            <TableHeader>Qty</TableHeader>
+            <TableHeader>Total Discount ($)</TableHeader>
+            <TableHeader>Total ($)</TableHeader>
+            <TableHeader>Action</TableHeader>
+          </TableRow>
+        </TableHead>
+        <TableBody>
+          {/* Render Existing Rows */}
+          {lineItems.map(item => (
+            <LineItemRow 
+              key={item.id} 
+              item={item} 
+              dealId={dealId} 
+              products={products}
+              fetchProducts={fetchProducts}
+              addAlert={addAlert} 
+              onRefresh={fetchLineItems} 
+            />
+          ))}
+
+          {/* Render Add Row inline if isAdding is true */}
+          {isAdding && (
+            <AddLineItemRow 
+              dealId={dealId} 
+              products={products}
+              fetchProducts={fetchProducts}
+              addAlert={addAlert} 
+              onSuccess={() => {
+                setIsAdding(false);
+                fetchLineItems();
+              }}
+              onCancel={() => setIsAdding(false)}
+            />
+          )}
+        </TableBody>
+      </Table>
+
+      {!isAdding && (
+        <Box>
+          <Button variant="primary" onClick={() => setIsAdding(true)}>
+            <Icon name="add" /> Add Line Item
+          </Button>
+        </Box>
+      )}
+    </Flex>
+  );
+};
+
+// --- SUB-COMPONENT: INLINE EDIT ROW ---
+const LineItemRow = ({ item, dealId, products, fetchProducts, addAlert, onRefresh }) => {
+  const [isEditing, setIsEditing] = useState(false);
+  
+  const [productId, setProductId] = useState(item.productId || '');
+  const [name, setName] = useState(item.name);
+  const [sku, setSku] = useState(item.sku);
+  const [price, setPrice] = useState(item.price);
+  const [quantity, setQuantity] = useState(item.quantity);
+  const [discount, setDiscount] = useState(item.discount || '0');
+  
+  const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  const hasChanges = 
+    productId !== (item.productId || '') || 
+    price !== item.price || 
+    quantity !== item.quantity || 
+    discount !== (item.discount || '0');
+
+  // Calculate live amount for edit preview (Applied on Total)
+  const liveTotal = Math.max(0, (parseFloat(price || 0) * parseFloat(quantity || 0)) - parseFloat(discount || 0)).toFixed(2);
+
+  const handleCancel = () => {
+    setProductId(item.productId || '');
+    setName(item.name);
+    setSku(item.sku);
+    setPrice(item.price);
+    setQuantity(item.quantity);
+    setDiscount(item.discount || '0');
+    setIsEditing(false);
+  };
+
+  const handleProductChange = (val) => {
+    setProductId(val);
+    const product = products.find(p => p.value === val);
+    if (product) {
+      setName(product.name);
+      setSku(product.sku);
+      setPrice(product.price); 
     }
   };
 
-  // Auto-fill logic when selecting from library
-  const handleProductSelect = (productId) => {
-    const selected = productOptions.find(opt => opt.value === productId);
-    if (selected) {
-      setEditFormData({
-        ...editFormData,
-        productId: selected.value,
-        name: selected.name,
-        sku: selected.sku,
-        price: selected.price || '0'
-      });
-    }
-  };
-
-  const handleEditClick = (item) => {
-    setEditingId(item.id);
-    setEditFormData({ 
-      id: item.id, 
-      productId: item.productId || null, 
-      name: item.name, 
-      sku: item.sku || '', 
-      price: item.price, 
-      quantity: item.quantity 
-    });
-  };
-
-  const handleCreateNewClick = () => {
-    if (editingId === 'NEW_TEMP_ITEM') return; 
-    const tempItem = { id: 'NEW_TEMP_ITEM', name: '', sku: '', price: '0', quantity: '1', amount: '0' };
-    setLineItems([...lineItems, tempItem]);
-    setEditingId('NEW_TEMP_ITEM');
-    setEditFormData({ id: null, productId: null, name: '', sku: '', price: '0', quantity: '1' });
-  };
-
-  const handleSave = async () => {
+  const handleUpdate = async () => {
     setSaving(true);
     try {
       const result = await hubspot.serverless('save_line_item_function', {
-        parameters: { 
-          dealId: context.crm.objectId,
-          ...editFormData
+        parameters: {
+          dealId,
+          id: item.id,
+          name: name,
+          price,
+          quantity,
+          discount, // Passing Total Discount
+          productId: productId,
+          sku: sku
         }
       });
+
       if (result.body.success) {
-        addAlert({ title: "Success", message: result.body.message, type: "success" });
-        setEditingId(null);
-        fetchLineItems();
+        addAlert({ title: "Success", message: "Line item updated", type: "success" });
+        setIsEditing(false);
+        onRefresh(); 
+      } else {
+        addAlert({ title: "Error", message: result.body.error, type: "danger" });
       }
+    } catch (error) {
+      addAlert({ title: "Error", message: error.message, type: "danger" });
     } finally {
       setSaving(false);
     }
   };
 
-  if (loading && lineItems.length === 0) return <LoadingSpinner label="Loading..." />;
+  const handleDelete = async () => {
+    setDeleting(true);
+    try {
+      const result = await hubspot.serverless('delete_line_item_function', {
+        parameters: { id: item.id }
+      });
+
+      if (result.body.success) {
+        addAlert({ title: "Success", message: "Line item deleted", type: "success" });
+        onRefresh(); 
+      } else {
+        addAlert({ title: "Error", message: result.body.error, type: "danger" });
+        setDeleting(false);
+      }
+    } catch (error) {
+      addAlert({ title: "Error", message: error.message, type: "danger" });
+      setDeleting(false);
+    }
+  };
+
+  if (!isEditing) {
+    return (
+      <TableRow>
+        <TableCell>
+          <Text format={{ fontWeight: "bold" }}>{item.name}</Text>
+          <Text variant="microcopy">{item.sku || 'N/A'}</Text>
+        </TableCell>
+        <TableCell><Text>${item.price}</Text></TableCell>
+        <TableCell><Text>{item.quantity}</Text></TableCell>
+        <TableCell><Text>${item.discount}</Text></TableCell>
+        <TableCell><Text format={{ fontWeight: "bold" }}>${item.amount}</Text></TableCell>
+        <TableCell>
+          <Flex direction="row" gap="small">
+            <Button size="small" variant="secondary" onClick={() => setIsEditing(true)}>
+              <Icon name="edit" />
+            </Button>
+            <Button size="small" variant="destructive" onClick={handleDelete} disabled={deleting}>
+              {deleting ? <LoadingSpinner size="xs" /> : <Icon name="delete" />}
+            </Button>
+          </Flex>
+        </TableCell>
+      </TableRow>
+    );
+  }
 
   return (
-    <Flex direction="column" gap="medium">
-      <Table bordered={true}>
-        <TableHead>
-          <TableRow>
-            <TableHeader>Product / Name</TableHeader>
-            <TableHeader>SKU</TableHeader>
-            <TableHeader>Qty</TableHeader>
-            <TableHeader>Price ($)</TableHeader>
-            <TableHeader>Amount ($)</TableHeader>
-            <TableHeader>Actions</TableHeader>
-          </TableRow>
-        </TableHead>
-        <TableBody>
-          {lineItems.map((item) => {
-            const isEditing = editingId === item.id;
-            const isLibraryProduct = !!editFormData.productId;
+    <TableRow>
+      <TableCell>
+        <Select
+          name={`product-select-${item.id}`}
+          options={products}
+          value={productId}
+          onChange={handleProductChange}
+          onSearchInputChange={fetchProducts}
+          placeholder="Select a product..."
+          variant="transparent"
+        />
+        <Text variant="microcopy">{sku || 'N/A'}</Text>
+      </TableCell>
+      <TableCell><Input name={`price-${item.id}`} type="number" value={price} onChange={setPrice} /></TableCell>
+      <TableCell><Input name={`qty-${item.id}`} type="number" value={quantity} onChange={setQuantity} /></TableCell>
+      <TableCell><Input name={`disc-${item.id}`} type="number" value={discount} onChange={setDiscount} /></TableCell>
+      <TableCell><Text format={{ fontWeight: "bold" }}>${liveTotal}</Text></TableCell>
+      <TableCell>
+        <Flex direction="row" gap="small">
+          <Button size="small" variant="primary" disabled={!hasChanges || saving} onClick={handleUpdate}>
+            {saving ? <LoadingSpinner size="xs" /> : <Icon name="save" />}
+          </Button>
+          <Button size="small" variant="secondary" onClick={handleCancel} disabled={saving}>
+            <Icon name="remove" />
+          </Button>
+        </Flex>
+      </TableCell>
+    </TableRow>
+  );
+};
 
-            return (
-              <TableRow key={item.id}>
-                <TableCell>
-                  {isEditing ? (
-                    <Flex direction="column" gap="extra-small">
-                      <Select
-                        placeholder="Search Library..."
-                        options={productOptions}
-                        onInput={handleSearchProducts}
-                        onChange={handleProductSelect}
-                      />
-                      <Text variant="microcopy" color="muted">{editFormData.name}</Text>
-                    </Flex>
-                  ) : item.name}
-                </TableCell>
-                <TableCell>
-                  {isEditing ? (
-                    <Input 
-                      value={editFormData.sku} 
-                      onChange={(val) => setEditFormData({ ...editFormData, sku: val })} 
-                      placeholder="SKU"
-                      readonly={isLibraryProduct}
-                    />
-                  ) : item.sku}
-                </TableCell>
-                <TableCell>
-                  {isEditing ? (
-                    <Input type="number" value={editFormData.quantity} onChange={(val) => setEditFormData({ ...editFormData, quantity: val })} />
-                  ) : item.quantity}
-                </TableCell>
-                <TableCell>
-                  {isEditing ? (
-                    <Input type="number" value={editFormData.price} onChange={(val) => setEditFormData({ ...editFormData, price: val })} />
-                  ) : item.price}
-                </TableCell>
-                <TableCell format={{ fontWeight: 'bold' }}>
-                  {isEditing 
-                    ? (parseFloat(editFormData.price || 0) * parseFloat(editFormData.quantity || 0)).toFixed(2) 
-                    : item.amount}
-                </TableCell>
-                <TableCell>
-                  {isEditing ? (
-                    <Flex direction="row" gap="small">
-                      <Button size="sm" variant="primary" onClick={handleSave} disabled={saving}>Save</Button>
-                      <Button size="sm" onClick={() => { 
-                        if (editingId === 'NEW_TEMP_ITEM') setLineItems(lineItems.filter(i => i.id !== 'NEW_TEMP_ITEM'));
-                        setEditingId(null);
-                      }}>Cancel</Button>
-                    </Flex>
-                  ) : (
-                    <Button size="sm" variant="secondary" onClick={() => handleEditClick(item)} disabled={editingId !== null}>Edit</Button>
-                  )}
-                </TableCell>
-              </TableRow>
-            );
-          })}
-        </TableBody>
-      </Table>
+// --- SUB-COMPONENT: INLINE ADD ROW ---
+const AddLineItemRow = ({ dealId, products, fetchProducts, addAlert, onSuccess, onCancel }) => {
+  const [selectedProductId, setSelectedProductId] = useState('');
+  const [selectedProductDetails, setSelectedProductDetails] = useState(null);
+  const [price, setPrice] = useState('0');
+  const [quantity, setQuantity] = useState('1');
+  const [discount, setDiscount] = useState('0');
+  const [loading, setLoading] = useState(false);
 
-      <Flex direction="row" justify="between" align="center">
-        <Box>
-           <Text variant="microcopy">Total Items: {lineItems.length}</Text>
-        </Box>
-        <Button 
-          size="sm" 
-          variant="primary" 
-          onClick={handleCreateNewClick} 
-          disabled={editingId !== null}
-        >
-          + Add Line Item
-        </Button>
-      </Flex>
-    </Flex>
+  // Calculate live amount for the new row preview (Applied on Total)
+  const liveTotal = Math.max(0, (parseFloat(price || 0) * parseFloat(quantity || 0)) - parseFloat(discount || 0)).toFixed(2);
+
+  const handleProductChange = (val) => {
+    setSelectedProductId(val);
+    const product = products.find(p => p.value === val);
+    setSelectedProductDetails(product || null);
+    if (product) {
+      setPrice(product.price || '0');
+    }
+  };
+
+  const handleSaveItem = async () => {
+    if (!selectedProductDetails) return;
+    setLoading(true);
+
+    try {
+      const result = await hubspot.serverless('save_line_item_function', {
+        parameters: {
+          dealId,
+          productId: selectedProductDetails.value,
+          name: selectedProductDetails.name,
+          price: price,
+          sku: selectedProductDetails.sku,
+          quantity,
+          discount // Passing Total Discount
+        }
+      });
+
+      if (result.body.success) {
+        addAlert({ title: "Success", message: "Line item added", type: "success" });
+        onSuccess();
+      } else {
+        addAlert({ title: "Error", message: result.body.error, type: "danger" });
+      }
+    } catch (error) {
+      addAlert({ title: "Error", message: error.message, type: "danger" });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <TableRow>
+      <TableCell>
+        <Select
+          name="product-select-new"
+          options={products}
+          value={selectedProductId}
+          onChange={handleProductChange}
+          onSearchInputChange={fetchProducts}
+          placeholder="Search product..."
+          variant="transparent"
+        />
+        {selectedProductDetails && (
+          <Text variant="microcopy">
+             {selectedProductDetails.sku || 'N/A'}
+          </Text>
+        )}
+      </TableCell>
+      <TableCell><Input name="new-price" type="number" value={price} onChange={setPrice} /></TableCell>
+      <TableCell><Input name="new-qty" type="number" value={quantity} onChange={setQuantity} /></TableCell>
+      <TableCell><Input name="new-disc" type="number" value={discount} onChange={setDiscount} /></TableCell>
+      <TableCell><Text format={{ fontWeight: "bold" }}>${liveTotal}</Text></TableCell>
+      <TableCell>
+        <Flex direction="row" gap="small">
+          <Button size="small" variant="primary" onClick={handleSaveItem} disabled={loading || !selectedProductId}>
+            {loading ? <LoadingSpinner size="xs" /> : <Icon name="save" />}
+          </Button>
+          <Button size="small" variant="secondary" onClick={onCancel} disabled={loading}>
+            <Icon name="remove" />
+          </Button>
+        </Flex>
+      </TableCell>
+    </TableRow>
   );
 };
