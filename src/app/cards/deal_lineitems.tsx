@@ -1,17 +1,27 @@
 import React, { useState, useEffect } from 'react';
 import { 
-  Button, Input, Icon, Flex, Box, Select, Text, hubspot, 
-  Table, TableHead, TableRow, TableHeader, TableBody, TableCell, LoadingSpinner 
+  Button, Icon, Flex, Box, Select, Text, hubspot, 
+  Table, TableHead, TableRow, TableHeader, TableBody, TableCell, LoadingSpinner,
+  NumberInput, CurrencyInput, LoadingButton, Inline
 } from '@hubspot/ui-extensions';
 
 hubspot.extend(({ context, actions }) => (
   <LineItemManager context={context} addAlert={actions.addAlert} />
 ));
 
+// Helper function to format currency natively
+const formatCurrency = (value, currencyCode) => {
+  return new Intl.NumberFormat(undefined, {
+    style: 'currency',
+    currency: currencyCode || 'USD',
+  }).format(value);
+};
+
 // --- MAIN COMPONENT: LIST & MANAGER ---
 const LineItemManager = ({ context, addAlert }) => {
   const [lineItems, setLineItems] = useState([]);
   const [products, setProducts] = useState([]);
+  const [currencyCode, setCurrencyCode] = useState('USD');
   const [loadingItems, setLoadingItems] = useState(true);
   const [isAdding, setIsAdding] = useState(false);
   const dealId = context.crm.objectId;
@@ -24,6 +34,11 @@ const LineItemManager = ({ context, addAlert }) => {
       });
       if (result.body.success) {
         setLineItems(result.body.lineItems);
+        const fetchedCurrency = result.body.currencyCode || 'USD';
+        setCurrencyCode(fetchedCurrency);
+        
+        // Fetch products only after we know the currency code so the dropdown formats correctly
+        fetchProducts('', fetchedCurrency);
       } else {
         addAlert({ title: "Error", message: result.body.error, type: "danger" });
       }
@@ -34,13 +49,18 @@ const LineItemManager = ({ context, addAlert }) => {
     }
   };
 
-  const fetchProducts = async (searchQuery = '') => {
+  const fetchProducts = async (searchQuery = '', currCode = currencyCode) => {
     try {
       const result = await hubspot.serverless('search_products_function', {
         parameters: { query: searchQuery }
       });
       if (result.body.success) {
-        setProducts(result.body.options);
+        // Map labels dynamically based on the current currency
+        const formattedOptions = result.body.options.map(prod => ({
+          ...prod,
+          label: `${prod.name} - ${formatCurrency(prod.price || 0, currCode)}`
+        }));
+        setProducts(formattedOptions);
       }
     } catch (error) {
       addAlert({ title: "Error", message: "Failed to load products", type: "danger" });
@@ -48,8 +68,8 @@ const LineItemManager = ({ context, addAlert }) => {
   };
 
   useEffect(() => {
+    // This will trigger fetchProducts internally once the currency is acquired
     fetchLineItems();
-    fetchProducts();
   }, []);
 
   if (loadingItems) return <LoadingSpinner label="Loading line items..." />;
@@ -60,10 +80,10 @@ const LineItemManager = ({ context, addAlert }) => {
         <TableHead>
           <TableRow>
             <TableHeader>Product</TableHeader>
-            <TableHeader>Price ($)</TableHeader>
+            <TableHeader>Price</TableHeader>
             <TableHeader>Qty</TableHeader>
-            <TableHeader>Total Discount ($)</TableHeader>
-            <TableHeader>Total ($)</TableHeader>
+            <TableHeader>Total Discount</TableHeader>
+            <TableHeader>Total ({currencyCode})</TableHeader>
             <TableHeader>Action</TableHeader>
           </TableRow>
         </TableHead>
@@ -75,7 +95,8 @@ const LineItemManager = ({ context, addAlert }) => {
               item={item} 
               dealId={dealId} 
               products={products}
-              fetchProducts={fetchProducts}
+              currencyCode={currencyCode}
+              fetchProducts={(q) => fetchProducts(q, currencyCode)}
               addAlert={addAlert} 
               onRefresh={fetchLineItems} 
             />
@@ -86,7 +107,8 @@ const LineItemManager = ({ context, addAlert }) => {
             <AddLineItemRow 
               dealId={dealId} 
               products={products}
-              fetchProducts={fetchProducts}
+              currencyCode={currencyCode}
+              fetchProducts={(q) => fetchProducts(q, currencyCode)}
               addAlert={addAlert} 
               onSuccess={() => {
                 setIsAdding(false);
@@ -110,35 +132,35 @@ const LineItemManager = ({ context, addAlert }) => {
 };
 
 // --- SUB-COMPONENT: INLINE EDIT ROW ---
-const LineItemRow = ({ item, dealId, products, fetchProducts, addAlert, onRefresh }) => {
+const LineItemRow = ({ item, dealId, products, currencyCode, fetchProducts, addAlert, onRefresh }) => {
   const [isEditing, setIsEditing] = useState(false);
   
   const [productId, setProductId] = useState(item.productId || '');
   const [name, setName] = useState(item.name);
   const [sku, setSku] = useState(item.sku);
-  const [price, setPrice] = useState(item.price);
-  const [quantity, setQuantity] = useState(item.quantity);
-  const [discount, setDiscount] = useState(item.discount || '0');
+  
+  const [price, setPrice] = useState(Number(item.price) || 0);
+  const [quantity, setQuantity] = useState(Number(item.quantity) || 1);
+  const [discount, setDiscount] = useState(Number(item.discount) || 0);
   
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
   const hasChanges = 
     productId !== (item.productId || '') || 
-    price !== item.price || 
-    quantity !== item.quantity || 
-    discount !== (item.discount || '0');
+    price !== (Number(item.price) || 0) || 
+    quantity !== (Number(item.quantity) || 1) || 
+    discount !== (Number(item.discount) || 0);
 
-  // Calculate live amount for edit preview (Applied on Total)
-  const liveTotal = Math.max(0, (parseFloat(price || 0) * parseFloat(quantity || 0)) - parseFloat(discount || 0)).toFixed(2);
+  const liveTotal = Math.max(0, (price * quantity) - discount);
 
   const handleCancel = () => {
     setProductId(item.productId || '');
     setName(item.name);
     setSku(item.sku);
-    setPrice(item.price);
-    setQuantity(item.quantity);
-    setDiscount(item.discount || '0');
+    setPrice(Number(item.price) || 0);
+    setQuantity(Number(item.quantity) || 1);
+    setDiscount(Number(item.discount) || 0);
     setIsEditing(false);
   };
 
@@ -148,7 +170,7 @@ const LineItemRow = ({ item, dealId, products, fetchProducts, addAlert, onRefres
     if (product) {
       setName(product.name);
       setSku(product.sku);
-      setPrice(product.price); 
+      setPrice(Number(product.price) || 0); 
     }
   };
 
@@ -160,9 +182,9 @@ const LineItemRow = ({ item, dealId, products, fetchProducts, addAlert, onRefres
           dealId,
           id: item.id,
           name: name,
-          price,
-          quantity,
-          discount, // Passing Total Discount
+          price: price.toString(),
+          quantity: quantity.toString(),
+          discount: discount.toString(),
           productId: productId,
           sku: sku
         }
@@ -206,22 +228,23 @@ const LineItemRow = ({ item, dealId, products, fetchProducts, addAlert, onRefres
     return (
       <TableRow>
         <TableCell>
-          <Text format={{ fontWeight: "bold" }}>{item.name}</Text>
-          <Text variant="microcopy">{item.sku || 'N/A'}</Text>
+          <Text format={{ fontWeight: "bold" }}>{item.name}
+            <Text variant="microcopy">{item.sku || 'N/A'}</Text>
+          </Text>
         </TableCell>
-        <TableCell><Text>${item.price}</Text></TableCell>
+        <TableCell><Text>{formatCurrency(item.price, currencyCode)}</Text></TableCell>
         <TableCell><Text>{item.quantity}</Text></TableCell>
-        <TableCell><Text>${item.discount}</Text></TableCell>
-        <TableCell><Text format={{ fontWeight: "bold" }}>${item.amount}</Text></TableCell>
+        <TableCell><Text>{formatCurrency(item.discount, currencyCode)}</Text></TableCell>
+        <TableCell><Text format={{ fontWeight: "bold" }}>{formatCurrency(item.amount, currencyCode)}</Text></TableCell>
         <TableCell>
-          <Flex direction="row" gap="small">
+          <Inline gap="small">
             <Button size="small" variant="secondary" onClick={() => setIsEditing(true)}>
               <Icon name="edit" />
             </Button>
-            <Button size="small" variant="destructive" onClick={handleDelete} disabled={deleting}>
-              {deleting ? <LoadingSpinner size="xs" /> : <Icon name="delete" />}
-            </Button>
-          </Flex>
+            <LoadingButton size="small" variant="destructive" loading={deleting} onClick={handleDelete}>
+              <Icon name="delete" />
+            </LoadingButton>
+          </Inline>
         </TableCell>
       </TableRow>
     );
@@ -241,42 +264,48 @@ const LineItemRow = ({ item, dealId, products, fetchProducts, addAlert, onRefres
         />
         <Text variant="microcopy">{sku || 'N/A'}</Text>
       </TableCell>
-      <TableCell><Input name={`price-${item.id}`} type="number" value={price} onChange={setPrice} /></TableCell>
-      <TableCell><Input name={`qty-${item.id}`} type="number" value={quantity} onChange={setQuantity} /></TableCell>
-      <TableCell><Input name={`disc-${item.id}`} type="number" value={discount} onChange={setDiscount} /></TableCell>
-      <TableCell><Text format={{ fontWeight: "bold" }}>${liveTotal}</Text></TableCell>
       <TableCell>
-        <Flex direction="row" gap="small">
-          <Button size="small" variant="primary" disabled={!hasChanges || saving} onClick={handleUpdate}>
-            {saving ? <LoadingSpinner size="xs" /> : <Icon name="save" />}
-          </Button>
+        <CurrencyInput currency={currencyCode} label="Unit Price" name={`price-${item.id}`} value={price} onChange={setPrice} />
+      </TableCell>
+      <TableCell>
+        <NumberInput label="Quantity" name={`qty-${item.id}`} value={quantity} onChange={setQuantity} />
+      </TableCell>
+      <TableCell>
+        <CurrencyInput currency={currencyCode} label="Discount Amount" name={`disc-${item.id}`} value={discount} onChange={setDiscount} />
+      </TableCell>
+      <TableCell><Text format={{ fontWeight: "bold" }}>{formatCurrency(liveTotal, currencyCode)}</Text></TableCell>
+      <TableCell>
+        <Inline gap="small">
+          <LoadingButton size="small" variant="primary" loading={saving} disabled={!hasChanges} onClick={handleUpdate}>
+            <Icon name="save" />
+          </LoadingButton>
           <Button size="small" variant="secondary" onClick={handleCancel} disabled={saving}>
             <Icon name="remove" />
           </Button>
-        </Flex>
+        </Inline>
       </TableCell>
     </TableRow>
   );
 };
 
 // --- SUB-COMPONENT: INLINE ADD ROW ---
-const AddLineItemRow = ({ dealId, products, fetchProducts, addAlert, onSuccess, onCancel }) => {
+const AddLineItemRow = ({ dealId, products, currencyCode, fetchProducts, addAlert, onSuccess, onCancel }) => {
   const [selectedProductId, setSelectedProductId] = useState('');
   const [selectedProductDetails, setSelectedProductDetails] = useState(null);
-  const [price, setPrice] = useState('0');
-  const [quantity, setQuantity] = useState('1');
-  const [discount, setDiscount] = useState('0');
+  
+  const [price, setPrice] = useState(0);
+  const [quantity, setQuantity] = useState(1);
+  const [discount, setDiscount] = useState(0);
   const [loading, setLoading] = useState(false);
 
-  // Calculate live amount for the new row preview (Applied on Total)
-  const liveTotal = Math.max(0, (parseFloat(price || 0) * parseFloat(quantity || 0)) - parseFloat(discount || 0)).toFixed(2);
+  const liveTotal = Math.max(0, (price * quantity) - discount);
 
   const handleProductChange = (val) => {
     setSelectedProductId(val);
     const product = products.find(p => p.value === val);
     setSelectedProductDetails(product || null);
     if (product) {
-      setPrice(product.price || '0');
+      setPrice(Number(product.price) || 0);
     }
   };
 
@@ -290,10 +319,10 @@ const AddLineItemRow = ({ dealId, products, fetchProducts, addAlert, onSuccess, 
           dealId,
           productId: selectedProductDetails.value,
           name: selectedProductDetails.name,
-          price: price,
+          price: price.toString(),
           sku: selectedProductDetails.sku,
-          quantity,
-          discount // Passing Total Discount
+          quantity: quantity.toString(),
+          discount: discount.toString()
         }
       });
 
@@ -328,19 +357,25 @@ const AddLineItemRow = ({ dealId, products, fetchProducts, addAlert, onSuccess, 
           </Text>
         )}
       </TableCell>
-      <TableCell><Input name="new-price" type="number" value={price} onChange={setPrice} /></TableCell>
-      <TableCell><Input name="new-qty" type="number" value={quantity} onChange={setQuantity} /></TableCell>
-      <TableCell><Input name="new-disc" type="number" value={discount} onChange={setDiscount} /></TableCell>
-      <TableCell><Text format={{ fontWeight: "bold" }}>${liveTotal}</Text></TableCell>
       <TableCell>
-        <Flex direction="row" gap="small">
-          <Button size="small" variant="primary" onClick={handleSaveItem} disabled={loading || !selectedProductId}>
-            {loading ? <LoadingSpinner size="xs" /> : <Icon name="save" />}
-          </Button>
+        <CurrencyInput currency={currencyCode} label="Unit Price" name="new-price" value={price} onChange={setPrice} />
+      </TableCell>
+      <TableCell>
+        <NumberInput label="Quantity" name="new-qty" value={quantity} onChange={setQuantity} />
+      </TableCell>
+      <TableCell>
+        <CurrencyInput currency={currencyCode} label="Discount Amount" name="new-disc" value={discount} onChange={setDiscount} />
+      </TableCell>
+      <TableCell><Text format={{ fontWeight: "bold" }}>{formatCurrency(liveTotal, currencyCode)}</Text></TableCell>
+      <TableCell>
+        <Inline gap="small">
+          <LoadingButton size="small" variant="primary" loading={loading} disabled={!selectedProductId} onClick={handleSaveItem}>
+            <Icon name="save" />
+          </LoadingButton>
           <Button size="small" variant="secondary" onClick={onCancel} disabled={loading}>
             <Icon name="remove" />
           </Button>
-        </Flex>
+        </Inline>
       </TableCell>
     </TableRow>
   );

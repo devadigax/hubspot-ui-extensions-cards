@@ -12,13 +12,10 @@ exports.main = async (context) => {
     const headers = { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' };
     
     const priceFloat = parseFloat(price) || 0;
-    const qtyFloat = parseFloat(quantity) || 1; // Default to 1 to prevent division by zero
+    const qtyFloat = parseFloat(quantity) || 1; 
     const totalDiscountFloat = parseFloat(discount) || 0;
     
-    // Calculate final amount exactly how the UI does it
     const amount = ((priceFloat * qtyFloat) - totalDiscountFloat).toString();
-
-    // Convert UI's Total Discount into HubSpot's expected Per-Unit Discount
     const perUnitDiscount = totalDiscountFloat / qtyFloat;
 
     const properties = {
@@ -26,18 +23,16 @@ exports.main = async (context) => {
       price: price.toString(),
       quantity: quantity.toString(),
       amount: amount,
-      discount: perUnitDiscount.toString() // Save as per-unit
+      discount: perUnitDiscount.toString() 
     };
 
     if (sku) properties.hs_sku = sku;
     if (productId) properties.hs_product_id = productId;
 
     if (id) {
-      // UPDATE EXISTING
       await axios.patch(`https://api.hubapi.com/crm/v3/objects/line_items/${id}`, { properties }, { headers });
       return { statusCode: 200, body: { success: true, message: 'Line item updated.' } };
     } else {
-      // CREATE NEW
       await axios.post(
         `https://api.hubapi.com/crm/v3/objects/line_items`,
         {

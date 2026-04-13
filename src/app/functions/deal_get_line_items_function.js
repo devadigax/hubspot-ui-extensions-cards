@@ -9,6 +9,14 @@ exports.main = async (context) => {
     const accessToken = process.env.PRIVATE_APP_ACCESS_TOKEN;
     const headers = { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' };
 
+    // 1. Fetch Deal to get its Currency Code
+    const dealResponse = await axios.get(
+      `https://api.hubapi.com/crm/v3/objects/deals/${dealId}?properties=deal_currency_code`,
+      { headers }
+    );
+    const currencyCode = dealResponse.data.properties.deal_currency_code || 'USD';
+
+    // 2. Fetch Line Item Associations
     const associationsResponse = await axios.get(
       `https://api.hubapi.com/crm/v4/objects/deals/${dealId}/associations/line_items`,
       { headers }
@@ -16,8 +24,9 @@ exports.main = async (context) => {
 
     const lineItemIds = associationsResponse.data.results.map(assoc => assoc.toObjectId);
 
-    if (lineItemIds.length === 0) return { statusCode: 200, body: { success: true, lineItems: [] } };
+    if (lineItemIds.length === 0) return { statusCode: 200, body: { success: true, lineItems: [], currencyCode } };
 
+    // 3. Batch Read Line Items
     const batchResponse = await axios.post(
       'https://api.hubapi.com/crm/v3/objects/line_items/batch/read',
       {
@@ -32,7 +41,6 @@ exports.main = async (context) => {
       const quantity = parseFloat(item.properties.quantity || '0');
       const perUnitDiscount = parseFloat(item.properties.discount || '0');
       
-      // Convert HubSpot's Per-Unit discount back to a Total Discount for the UI
       const totalDiscount = (perUnitDiscount * quantity).toFixed(2);
 
       return {
@@ -42,12 +50,12 @@ exports.main = async (context) => {
         sku: item.properties.hs_sku || '',
         price: price.toString(),
         quantity: quantity.toString(),
-        discount: totalDiscount, // Pass Total Discount to UI
+        discount: totalDiscount,
         amount: parseFloat(item.properties.amount || '0').toFixed(2)
       };
     });
 
-    return { statusCode: 200, body: { success: true, lineItems: formattedLineItems } };
+    return { statusCode: 200, body: { success: true, lineItems: formattedLineItems, currencyCode } };
 
   } catch (error) {
     return { statusCode: 500, body: { success: false, error: 'Failed to fetch items.' } };

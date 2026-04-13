@@ -22,7 +22,7 @@ exports.main = async (context) => {
     );
 
     const options = response.data.results.map(prod => ({
-      label: `${prod.properties.name} - $${prod.properties.price || 0}`,
+      // Label formatting is now handled natively by the frontend, so we just return the raw values
       value: prod.id,
       name: prod.properties.name,
       price: prod.properties.price,
